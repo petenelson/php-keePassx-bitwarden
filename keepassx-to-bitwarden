@@ -1,0 +1,123 @@
+#!/usr/bin/env php
+<?php
+
+namespace KeepassX_To_Bitwarden;
+
+/**
+ * Converts a KeePassX CSV file to Bitwarden JSON.
+ *
+ * @return void
+ */
+function convert( $args ) {
+
+	// Read CSV file.
+	$fp = fopen( $args[1], 'r' );
+
+	$bitwarden = [
+		'encrypted' => false,
+		'folders'   => [],
+		'items'     => [],
+	];
+
+	$csv    = [];
+	$header = false;
+
+	// Map the CSV into an array.
+	while ( ! feof( $fp ) ) {
+
+		$row = fgetcsv( $fp );
+
+		if ( empty( $header ) ) {
+			$header = $row;
+		} else if ( ! empty( $row ) ) {
+
+			$csv[] = [
+				'Group'    => $row[0],
+				'Title'    => $row[1],
+				'Username' => $row[2],
+				'Password' => $row[3],
+				'URL'      => $row[4],
+				'Notes'    => $row[5],
+			];
+		}
+	}
+
+	fclose( $fp );
+
+	// Create IDs for each folder.
+	$folder_ids = [];
+
+	foreach ( $csv as $row ) {
+
+		if ( ! empty( $row['Group'] ) && ! isset( $folder_ids[ $row['Group'] ] ) ) {
+			$folder_ids[ $row['Group'] ] = guidv4();
+		}
+	}
+
+	// Store the folders to the export.
+	$bitwarden['folders'] = array_map(
+		function( $key, $value ) {
+
+			$key = str_replace( "Keepass/", '', $key );
+
+			return [
+				'id'   => $value,
+				'name' => $key,
+			];
+		},
+		array_keys( $folder_ids ),
+		array_values( $folder_ids )
+	);
+
+	// Now put each item in the export.
+	foreach ( $csv as $row ) {
+
+		$item = [
+			'id'             => guidv4(),
+			'organizationId' => null,
+			'folderId'       => $folder_ids[ $row['Group'] ],
+			'type'           => 1,
+			'reprompt'       => 0,
+			'name'           => $row['Title'],
+			'notes'          => $row['Notes'],
+			'favorites'      => false,
+			'login'          => [
+				'username' => $row['Username'],
+				'password' => $row['Password'],
+				'totp'     => null,
+			],
+			'collectionIds'  => null,
+		];
+
+		if ( ! empty( $row['URL'] ) ) {
+			$item['login']['uris'] = [
+				[
+					'match' => null,
+					'uri'   => $row['URL'],
+				],
+			];
+		}
+
+		$bitwarden['items'][] = $item;
+	}
+
+	// Save the export.
+	file_put_contents( 'converted-bitwarden-export.json', json_encode( $bitwarden, JSON_PRETTY_PRINT ) );
+}
+
+function guidv4($data = null) {
+	// Generate 16 bytes (128 bits) of random data or use the data passed into the function.
+	$data = $data ?? random_bytes(16);
+	assert(strlen($data) == 16);
+
+	// Set version to 0100
+	$data[6] = chr(ord($data[6]) & 0x0f | 0x40);
+	// Set bits 6-7 to 10
+	$data[8] = chr(ord($data[8]) & 0x3f | 0x80);
+
+	// Output the 36 character UUID.
+	return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+}
+
+// Run conversion.
+convert($argv);
